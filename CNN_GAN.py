@@ -1,9 +1,14 @@
+"""
+CelebA数据集图像：217*178
+为了CNN简化为128*128
+"""
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 import h5py
 import pandas, numpy, random
 import matplotlib.pyplot as plt
+from tqdm import tqdm  # 进度条可视化库
 
 # check if CUDA is available
 # if yes, set default tensor type to cuda
@@ -19,9 +24,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # device
 
+# 辅助函数，可以从numpy图像中裁剪任意大小的图像，裁剪区域位于图像的正中央。
+def crop_centre(img,new_width,new_height):
+    height,width, _ = img.shape
+    startx = width // 2 - new_width//2
+    starty = height // 2 - new_height//2
+    return img[starty:starty+new_height,startx:startx+new_width, :]
 
 # dataset class
-
 # 对数据集预处理
 class CelebADataset(Dataset):
 
@@ -32,15 +42,23 @@ class CelebADataset(Dataset):
 
     def __len__(self):
         return len(self.dataset)
-
+    # __getitem__ 返回一个张量（通道大小，通道，高度，宽度）
+    # numpy 三维张量（高度，宽度，3）
+    # permute（2,0,1）numpy数组重新排序，（3，高度，宽度）
     def __getitem__(self, index):
         if (index >= len(self.dataset)):
             raise IndexError()
         img = numpy.array(self.dataset[str(index) + '.jpg'])
-        return torch.cuda.FloatTensor(img) / 255.0
+        # 裁剪图像，变为128*128规格的图像
+        img = crop_centre(img,128,128)
+        return torch.cuda.FloatTensor(img).permute(2, 0, 1).view(1, 3, 128, 128) / 255.0
+        # view 为批次大小设置一个额外的维度，为1
+
 
     def plot_image(self, index):
-        plt.imshow(numpy.array(self.dataset[str(index) + '.jpg']), interpolation='nearest')
+        img = numpy.array(self.dataset[str(index)+'.jpg'])
+        img = crop_centre(img, 128, 128)  # 裁剪图形
+        plt.imshow(img, interpolation='nearest')
         # plt.show()
         pass
 
@@ -50,6 +68,9 @@ class CelebADataset(Dataset):
 celeba_dataset = CelebADataset('img\celeba_dataset\celeba_aligned_small.h5py')
 
 celeba_dataset.plot_image(43)
+
+
+
 
 
 # functions to generate random data
@@ -83,11 +104,21 @@ class Discriminator(nn.Module):
 
         # define neural network layers
         self.model = nn.Sequential(
-            View(218 * 178 * 3),
-            nn.Linear(3 * 218 * 178, 100),
-            nn.LeakyReLU(),
-            nn.LayerNorm(100),
-            nn.Linear(100, 1),
+            # 预期的输入形状（1,3,128,128）
+            nn.Conv2d(3, 256, kernel_size=8, stride=2),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(256, 256, kernel_size=8, stride=2),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(256, 3, kernel_size=8, stride=2),
+            nn.LeakyReLU(0.2),
+
+            # 用view将特征图重塑为一个简单地一维张量。
+            View(3*10*10),
+            nn.Linear(3*10*10, 1),
             nn.Sigmoid()
         )
         # create loss function
@@ -115,52 +146,24 @@ class Discriminator(nn.Module):
         if (self.counter % 10 == 0):
             self.progress.append(loss.item())
             pass
-        if (self.counter % 1000 == 0):
-            print("counter = ", self.counter)
-            pass
+        # if (self.counter % 1000 == 0):
+        #     print("counter = ", self.counter)
+        #     pass
 
         # zero gradients, perform a backward pass, update weights
         self.optimiser.zero_grad()
         loss.backward()
         self.optimiser.step()
+        pbar.update(1)
 
         pass
 
     def plot_progress(self):
-        df = pandas.DataFrame(self.progress, columns=['loss'])
+        df = pandas.DataFrame(self.progress, columns=['D_loss'])
         df.plot(ylim=(0), figsize=(16, 8), alpha=0.1, marker='.', grid=True, yticks=(0, 0.25, 0.5, 1.0, 5.0))
         pass
 
     pass
-
-
-# 测试判别器
-# D = Discriminator()
-# # move model to cuda device
-# D.to(device)
-#
-# for image_data_tensor in celeba_dataset:
-#     # real data
-#     D.train(image_data_tensor, torch.cuda.FloatTensor([1.0]))
-#     # fake data
-#     D.train(generate_random_image((218,178,3)), torch.cuda.FloatTensor([0.0]))
-#     pass
-#
-# # plot discriminator loss
-# D.plot_progress()
-# plt.show()
-#
-# # manually run discriminator to check it can tell real data from fake
-#
-# for i in range(4):
-#   image_data_tensor = celeba_dataset[random.randint(0,20000)]
-#   print( D.forward( image_data_tensor ).item() )
-#   pass
-#
-# for i in range(4):
-#   print( D.forward( generate_random_image((218,178,3))).item() )
-#   pass
-
 
 # generator class
 #
@@ -172,12 +175,28 @@ class Generator(nn.Module):
 
         # define neural network layers
         self.model = nn.Sequential(
-            nn.Linear(100, 3 * 10 * 10),
-            nn.LeakyReLU(),
-            nn.LayerNorm(3 * 10 * 10),  # 数据归一化
-            nn.Linear(3 * 10 * 10, 3 * 218 * 178),
-            nn.Sigmoid(),
-            View((218, 178, 3))  # 输出图像
+            # 输入是一个一维数组
+            # 100个随机种子-》3*1*11张量-》1,3,11,11张量
+            nn.Linear(100, 3 * 11 * 11),
+            nn.LeakyReLU(0.2),
+
+            # 转换成四维，利用View
+            View((1, 3, 11, 11)),
+
+            # 通过转置卷积（反卷积）层
+            nn.ConvTranspose2d(3, 256, kernel_size=8, stride=2),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+
+            # 第二层反卷积
+            nn.ConvTranspose2d(256, 256,kernel_size=8,stride=2),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+
+            # 最后一层转置卷积层，此时需要额外设置，补全padding = 1 ，作用：从中间网格中去掉外围的网格。若没有补全，想要正确输出则需要增加额外参数。
+            nn.ConvTranspose2d(256, 3, kernel_size=8, stride=2, padding=1),
+            nn.BatchNorm2d(3),
+            nn.Sigmoid()
         )
 
         # create optimiser, simple stochastic gradient descent
@@ -206,33 +225,19 @@ class Generator(nn.Module):
         loss.backward()  # 反向传递
         self.optimiser.step()  # 更新权重
 
+
         pass
 
     # 绘制图像
     def plot_progress(self):
-        df = pandas.DataFrame(self.progress, columns=['loss'])
+        df = pandas.DataFrame(self.progress, columns=['G_loss'])
         df.plot(ylim=(0), figsize=(16, 8), alpha=0.1, marker='.', grid=True, yticks=(0, 0.25, 0.5, 1.0, 5.0))
         pass
 
     pass
 
-
-# test gennerete output
-# check the generator output is of the right type and shape
-
-# G = Generator()
-# # move model to cuda device
-# G.to(device)
-#
-# output = G.forward(generate_random_seed(100))
-#
-# img = output.detach().cpu().numpy()
-#
-# plt.imshow(img, interpolation='none', cmap='Blues')
-# plt.show()
-
-
 # train
+
 
 # 进行训练
 D = Discriminator()
@@ -241,25 +246,20 @@ G = Generator()
 G.to(device)
 
 epochs = 1
-
-for epoch in range(epochs):
-    print("epoch = ", epoch + 1)
-
+with tqdm(total=epochs * 40000) as pbar:
+    for epoch in range(epochs):
+        print("epoch = ", epoch + 1)
     # 训练生成器和判别器
-
-    for image_data_tensor in celeba_dataset:
-        # train discriminator on true
-        D.train(image_data_tensor, torch.cuda.FloatTensor([1.0]))
-
-        # train discriminator on false
-        # use detach() so gradients in G are not calculated
-        D.train(G.forward(generate_random_seed(100)).detach(), torch.cuda.FloatTensor([0.0]))
-
-        # train generator
-        G.train(D, generate_random_seed(100), torch.cuda.FloatTensor([1.0]))
+        for image_data_tensor in celeba_dataset:
+            # train discriminator on true
+            D.train(image_data_tensor, torch.cuda.FloatTensor([1.0]))
+            # train discriminator on false
+            # use detach() so gradients in G are not calculated
+            D.train(G.forward(generate_random_seed(100)).detach(), torch.cuda.FloatTensor([0.0]))
+            # train generator
+            G.train(D, generate_random_seed(100), torch.cuda.FloatTensor([1.0]))
 
         pass
-
     pass
 
 # 绘图
@@ -276,12 +276,15 @@ f, axarr = plt.subplots(2, 3, figsize=(16, 8))
 for i in range(2):
     for j in range(3):
         output = G.forward(generate_random_seed(100))
-        img = output.detach().cpu().numpy()
+        img = output.detach().permute(0, 2, 3, 1).view(128, 128, 3).cpu().numpy()
         axarr[i, j].imshow(img, interpolation='none', cmap='Blues')
         pass
     pass
 plt.show()
 
+# 当前分配给张量的内存大小
 # torch.cuda.memory_allocated(device) / (1024*1024*1024)
+# 当前分配给张量的内存总量
 # torch.cuda.max_memory_allocated(device) / (1024*1024*1024)
+# 内存消耗汇总
 # print(torch.cuda.memory_summary(device, abbreviated=True))
