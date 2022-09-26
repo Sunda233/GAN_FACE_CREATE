@@ -75,11 +75,6 @@ celeba_dataset.plot_image(43)
 
 # functions to generate random data
 
-# def generate_random_image(size):
-#     random_data = torch.rand(size)
-#     return random_data
-
-
 def generate_random_seed(size):
     random_data = torch.randn(size)
     return random_data
@@ -93,6 +88,7 @@ class View(nn.Module):
     def forward(self, x):
         return x.view(*self.shape)
 
+# 推送测试
 
 # discriminator class
 # 定义判别器
@@ -107,14 +103,14 @@ class Discriminator(nn.Module):
             # 预期的输入形状（1,3,128,128）
             nn.Conv2d(3, 256, kernel_size=8, stride=2),
             nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2),
+            nn.GELU(),
 
-            nn.Conv2d(256, 256, kernel_size=8, stride=2),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2),
+            nn.Conv2d(256, 700, kernel_size=8, stride=2),
+            nn.BatchNorm2d(700),
+            nn.GELU(),
 
-            nn.Conv2d(256, 3, kernel_size=8, stride=2),
-            nn.LeakyReLU(0.2),
+            nn.Conv2d(700, 3, kernel_size=8, stride=2),
+            nn.GELU(),
 
             # 用view将特征图重塑为一个简单地一维张量。
             View(3*10*10),
@@ -155,7 +151,6 @@ class Discriminator(nn.Module):
         loss.backward()
         self.optimiser.step()
         pbar.update(1)
-
         pass
 
     def plot_progress(self):
@@ -178,7 +173,8 @@ class Generator(nn.Module):
             # 输入是一个一维数组
             # 100个随机种子-》3*1*11张量-》1,3,11,11张量
             nn.Linear(100, 3 * 11 * 11),
-            nn.LeakyReLU(0.2),
+            nn.GELU(),
+            # nn.LeakyReLU(0.2),
 
             # 转换成四维，利用View
             View((1, 3, 11, 11)),
@@ -186,15 +182,17 @@ class Generator(nn.Module):
             # 通过转置卷积（反卷积）层
             nn.ConvTranspose2d(3, 256, kernel_size=8, stride=2),
             nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2),
+            nn.GELU(),
+            # nn.LeakyReLU(0.2),
 
             # 第二层反卷积
-            nn.ConvTranspose2d(256, 256,kernel_size=8,stride=2),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2),
+            nn.ConvTranspose2d(256, 700, kernel_size=8,stride=2),
+            nn.BatchNorm2d(700),
+            nn.GELU(),
+            # nn.LeakyReLU(0.2),
 
             # 最后一层转置卷积层，此时需要额外设置，补全padding = 1 ，作用：从中间网格中去掉外围的网格。若没有补全，想要正确输出则需要增加额外参数。
-            nn.ConvTranspose2d(256, 3, kernel_size=8, stride=2, padding=1),
+            nn.ConvTranspose2d(700, 3, kernel_size=8, stride=2, padding=1),
             nn.BatchNorm2d(3),
             nn.Sigmoid()
         )
@@ -245,10 +243,10 @@ D.to(device)
 G = Generator()
 G.to(device)
 
-epochs = 1
-with tqdm(total=epochs * 40000) as pbar:
+epochs = 5
+with tqdm(total=epochs * celeba_dataset.__len__()*2) as pbar:
     for epoch in range(epochs):
-        print("epoch = ", epoch + 1)
+        # print("epoch = ", epoch + 1)
     # 训练生成器和判别器
         for image_data_tensor in celeba_dataset:
             # train discriminator on true
@@ -256,9 +254,9 @@ with tqdm(total=epochs * 40000) as pbar:
             # train discriminator on false
             # use detach() so gradients in G are not calculated
             D.train(G.forward(generate_random_seed(100)).detach(), torch.cuda.FloatTensor([0.0]))
+
             # train generator
             G.train(D, generate_random_seed(100), torch.cuda.FloatTensor([1.0]))
-
         pass
     pass
 
