@@ -105,11 +105,11 @@ class Discriminator(nn.Module):
             nn.BatchNorm2d(256),
             nn.GELU(),
 
-            nn.Conv2d(256, 700, kernel_size=8, stride=2),
-            nn.BatchNorm2d(700),
+            nn.Conv2d(256, 1000, kernel_size=8, stride=2),
+            nn.BatchNorm2d(1000),
             nn.GELU(),
 
-            nn.Conv2d(700, 3, kernel_size=8, stride=2),
+            nn.Conv2d(1000, 3, kernel_size=8, stride=2),
             nn.GELU(),
 
             # 用view将特征图重塑为一个简单地一维张量。
@@ -186,13 +186,13 @@ class Generator(nn.Module):
             # nn.LeakyReLU(0.2),
 
             # 第二层反卷积
-            nn.ConvTranspose2d(256, 700, kernel_size=8,stride=2),
-            nn.BatchNorm2d(700),
+            nn.ConvTranspose2d(256, 1000, kernel_size=8,stride=2),
+            nn.BatchNorm2d(1000),
             nn.GELU(),
             # nn.LeakyReLU(0.2),
 
             # 最后一层转置卷积层，此时需要额外设置，补全padding = 1 ，作用：从中间网格中去掉外围的网格。若没有补全，想要正确输出则需要增加额外参数。
-            nn.ConvTranspose2d(700, 3, kernel_size=8, stride=2, padding=1),
+            nn.ConvTranspose2d(1000, 3, kernel_size=8, stride=2, padding=1),
             nn.BatchNorm2d(3),
             nn.Sigmoid()
         )
@@ -243,7 +243,7 @@ D.to(device)
 G = Generator()
 G.to(device)
 
-epochs = 5
+epochs = 15
 with tqdm(total=epochs * celeba_dataset.__len__()*2) as pbar:
     for epoch in range(epochs):
         # print("epoch = ", epoch + 1)
@@ -286,3 +286,6 @@ plt.show()
 # torch.cuda.max_memory_allocated(device) / (1024*1024*1024)
 # 内存消耗汇总
 # print(torch.cuda.memory_summary(device, abbreviated=True))
+
+torch.save(Discriminator().state_dict(), 'Discriminator_1000_15.pkl')  # 若有模型经过训练，保存参数
+torch.save(Generator().state_dict(), 'Generator_1000_15.pkl')
